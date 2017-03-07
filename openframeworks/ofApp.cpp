@@ -1,5 +1,6 @@
+#include <cv.h>
 #include "ofApp.h"
-#include "ofxOpenCv.h"
+//#include "ofxOpenCv.h"
 
 //--------------------------------------------------------------
 void ofApp::setup(){
@@ -17,7 +18,9 @@ void ofApp::setup(){
     if(devices.size())
     {
         eye = devices.at(0);
-       bool res = eye->init(1, 30);
+        std::cerr << "Initializing..." << std::endl;
+       bool res = eye->init(1, 8);
+        std::cerr << "Starting..." << std::endl;
        eye->start();
 
         frame_rgb_left = new uint8_t[eye->getWidth()*eye->getHeight()*3];
@@ -30,7 +33,7 @@ void ofApp::setup(){
        videoTextureLeft.allocate(eye->getWidth(), eye->getHeight(), GL_RGB);
        videoTextureRight.allocate(eye->getWidth(), eye->getHeight(), GL_RGB);
 
-
+        std::cerr << "Thread Starting..." << std::endl;
         threadUpdate.start();
     }
 

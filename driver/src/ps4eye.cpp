@@ -42,6 +42,10 @@
 #else
 #include <sys/time.h>
 #include <time.h>
+#include <chrono>
+#include <tiff.h>
+#include <zconf.h>
+
 #if defined __MACH__ && defined __APPLE__
 #include <mach/mach.h>
 #include <mach/mach_time.h>
@@ -171,27 +175,12 @@ namespace ps4eye {
         QueryPerformanceCounter( &counter );
         return (int64_t)counter.QuadPart;
 #else
-        return (int64_t)mach_absolute_time();
+        auto time = std::chrono::high_resolution_clock::now();
+        auto timeMS = std::chrono::time_point_cast<std::chrono::milliseconds>(time);
+        return timeMS.time_since_epoch().count();
 #endif
     }
 
-    static double getTickFrequency()
-    {
-#if defined WIN32 || defined _WIN32 || defined WINCE
-        LARGE_INTEGER freq;
-        QueryPerformanceFrequency(&freq);
-        return (double)freq.QuadPart;
-#else
-        static double freq = 0;
-        if( freq == 0 )
-        {
-            mach_timebase_info_data_t sTimebaseInfo;
-            mach_timebase_info(&sTimebaseInfo);
-            freq = sTimebaseInfo.denom*1e9/sTimebaseInfo.numer;
-        }
-        return freq;
-#endif
-    }
     //
 
     /* Values for bmHeaderInfo (Video and Still Image Payload Headers, 2.4.3.3) */
@@ -604,7 +593,7 @@ namespace ps4eye {
         uint8_t frame_work_ind;
         uint32_t frame_counter;
         int8_t ff71status;
-        Boolean is_streaming;
+        bool is_streaming;
         double last_frame_time;
     };
 
@@ -649,7 +638,7 @@ namespace ps4eye {
                 for (i = 0; i < xfr->num_iso_packets; i++) {
                 struct libusb_iso_packet_descriptor *pack = &xfr->iso_packet_desc[i];
                 if (pack->status != LIBUSB_TRANSFER_COMPLETED) {
-                    fprintf(stderr, "Error: pack %u status %d\n", i, pack->status);
+                    //fprintf(stderr, "Error: pack %u status %d\n", i, pack->status);
                     //exit(5);
                 }
                 else

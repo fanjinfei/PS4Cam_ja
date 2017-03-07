@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ofMain.h"
+#include <utils/ofThread.h>
 #include "ps4eye.h"
 
 class ps4eyeUpdate : public ofThread{

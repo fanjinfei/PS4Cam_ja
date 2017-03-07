@@ -37,8 +37,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "CinderOpenCV.h"
+//#include "CinderOpenCV.h"
 
+#include <opencv2/opencv.hpp>
 // define shared_ptr in std
 
 #if (defined( _MSC_VER ) && ( _MSC_VER >= 1600 )) || (__cplusplus >= 201103L)
