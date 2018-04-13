@@ -1649,6 +1649,8 @@ namespace ps4eye {
 
        //TODO define different  modes to choose resolution and fps
          // init and start urb
+        uvc_set_video_mode(1, 30);
+
         urb->is_streaming=true;
         urb->start_transfers(handle_, frame_stride*frame_height);
 
