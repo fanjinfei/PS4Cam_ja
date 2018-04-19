@@ -48,5 +48,5 @@ add_executable(PS4Eye openframeworks/main.cpp openframeworks/ofApp.cpp)
 target_link_libraries(PS4Eye PS4EyeLib)
 target_link_libraries(PS4Eye ${OpenCV_LIBS} usb-1.0 pthread X11 GLEW glfw3 Xxf86vm Xcursor Xrandr Xi openFrameworks pthread
         GL boost_system mpg123 openal kiss sndfile PocoFoundation PocoNet PocoNetSSL PocoUtil PocoJSON PocoXML ssl crypto PocoCrypto
-        fontconfig freetype tess2 cairo freeimage boost_filesystem
+        fontconfig freetype tess2 cairo freeimage boost_filesystem jpeg
         )
