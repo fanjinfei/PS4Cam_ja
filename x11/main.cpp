@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -21,6 +22,18 @@
 
 int read_JPEG_file (char * filename);
 void write_JPEG_file (JSAMPLE * image_buffer, int image_height, int image_width, char * filename, int quality);
+
+
+// Threads
+pthread_t th; // Drawing thread
+pthread_t *thFill=0; // Sub drawing threads
+pthread_t thFifo; // Pipe control thread
+pthread_t thPreload; // Preload image thread
+
+// Drawing 
+pthread_mutex_t mutexData = PTHREAD_MUTEX_INITIALIZER; // Mutex protecting the data array
+
+
 unsigned char* read_jpeg(const char* sFile, int& iW, int& iH);
 //from https://social.msdn.microsoft.com/forums/windowsdesktop/en-us/1071301e-74a2-4de4-be72-81c34604cde9/program-to-translate-yuyv-to-rgbrgb modified yuyv order
 /*--------------------------------------------------------*\
@@ -147,7 +160,18 @@ class Data {
     float camFps;
     
     XImage *img_l;
+    XImage *img_r;
+    int hasNewFrame;
 
+};
+
+struct t_arg {
+    Data *pdev;
+    Display *disp;
+    Window win;
+    GC gc;
+    int appFps;
+    int run;
 };
 
 void Data::setup() {
@@ -157,6 +181,7 @@ void Data::setup() {
     camFpsLastSampleFrame = 0;
     camFpsLastSampleTime = 0;
     camFps = 0;
+    hasNewFrame = 0;
 
     // // list out the devices
     //  std::vector<PS3EYECam::PS3EYERef> devices( PS3EYECam::getDevices() );
@@ -184,6 +209,7 @@ void Data::setup() {
     else {
         int iw, ih;
         frame_rgb_left = read_jpeg("/tmp/a.jpg", iw, ih);
+        frame_rgb_right = read_jpeg("/tmp/b.jpg", iw, ih);
         std::cerr << "Initializing from file..." << iw <<" " << ih<< std::endl;
 
     }
@@ -204,6 +230,7 @@ void Data::update() {
 
             yuyvToRgb(frame->videoLeftFrame, frame_rgb_left, eye->getWidth(), eye->getHeight());
             //videoTextureLeft.loadData(frame_rgb_left, eye->getWidth(),eye->getHeight(), GL_RGB);
+            hasNewFrame = 1;
         }
 
         camFrameCount += isNewFrame ? 1: 0;
@@ -241,20 +268,34 @@ void Data::draw(Display *display, Window window, GC gc, int x, int y, int w, int
     int depth; 
     int iw = w;
     int ih = h;
-  
-    unsigned char *idata=(unsigned char*)malloc(iw*ih*4);
-    screen = DefaultScreen(display);
-    visual = DefaultVisual(display,screen); 
-    depth  = DefaultDepth(display,screen);
+    unsigned char *idata= NULL;
+    unsigned char *idata2= NULL;
+    if (img_l==NULL) {
+        screen = DefaultScreen(display);
+        visual = DefaultVisual(display,screen); 
+        depth  = DefaultDepth(display,screen);
+        idata = (unsigned char*)malloc(iw*ih*4);
+        img_l = XCreateImage (display,visual,depth,ZPixmap,0,(char*)idata,iw,ih,32,0);
+
+        idata2 = (unsigned char*)malloc(iw*ih*4);
+        img_r = XCreateImage (display,visual,depth,ZPixmap,0,(char*)idata2,iw,ih,32,0);
+    } 
+    
+    idata = (unsigned char *)img_l->data;
+    idata2 = (unsigned char *)img_r->data;
     for (int i=0; i<iw; i++)
         for (int j =0; j<ih; j++) {
-           for (int k=0; k<3; k++) 
+           for (int k=0; k<3; k++) {
                idata[(i+j*iw)*4+k] = frame_rgb_left[(i+j*640)*3 + k];
+               idata2[(i+j*iw)*4+k] = frame_rgb_right[(i+j*640)*3 + k];
+           }
         }
 
-    img_l = XCreateImage (display,visual,depth,ZPixmap,0,(char*)idata,iw,ih,32,0);
-    XImage *image = img_l;
-    XPutImage(display,window,gc,(XImage *)image,0,0,x,y,w,h);
+    XPutImage(display,window,gc,img_l,0,0,x,y,w,h);
+    XPutImage(display,window,gc,img_r,0,0,x+640,y,w,h);
+    /*std::string str = "app fps: 60";
+    XDrawString(display, window, gc,
+                            100, h+50, str.c_str(), str.size());*/
 }
 
 void Data::exit() {
@@ -269,8 +310,61 @@ void Data::exit() {
     delete[] frame_rgb_right;
 
     }
-    XDestroyImage(img_l);
+    if (img_r)
+        XDestroyImage(img_l);
+    if (img_r)
+        XDestroyImage(img_r);
     std::cout << "eye exited" << std::endl;
+}
+
+void *worker(void* arg) { //background camera+draw thread
+    struct t_arg *ta = (struct t_arg *)arg;
+    Data *pdev = ta->pdev;
+    long i = 0, j=0;
+    long last = ofGetElapsedTimeMillis();
+    while (ta->run) { //refresh rate:30
+        usleep(1*1000);
+        long now = ofGetElapsedTimeMillis();
+        if( now - last<33 ) continue;
+        
+        pdev->update();
+        if (pdev->hasNewFrame || 1) {
+            pdev->draw(ta->disp, ta->win, ta->gc, 0,0, 640,400);
+            pdev->hasNewFrame = 0;
+        }
+        i++;
+        if (i %33 ==0) { //app rate
+            ;//std::cout << "working ms... " << (now-last) << std::endl;
+        }
+        if( now > last + 1000 ) {
+            uint32_t framesPassed = i - j;
+            float appFps = (float)(framesPassed / ((now - last)*0.001f));
+
+            last = now;
+            j = i;
+            
+            std::cout << "appFps... " << appFps << std::endl;
+            
+            ta->appFps = (int) appFps;
+            std::string str = "app fps: " +std::to_string(ta->appFps) + "   ";
+            std::string cstr = "cam fps: " +std::to_string(int(pdev->camFps)) + "   ";
+            str = str+cstr;
+            
+            XClearArea(ta->disp, ta->win,100,430, 250, 20, false); //no background, do nothing
+            //XClearWindow(ta->disp, ta->win);
+            XDrawRectangle(ta->disp, ta->win, ta->gc,
+            //XFillRectangle(ta->disp, ta->win, ta->gc,
+                            90,430, 150, 20);
+                            
+            XDrawString(ta->disp, ta->win, ta->gc,
+                            100, 450, str.c_str(), str.size());
+
+        }
+        XFlush(ta->disp);
+
+    }
+    std::cout << "worker exited" << std::endl;
+    return NULL;
 }
 
 int main (int argc, char *argv[])
@@ -302,6 +396,7 @@ int main (int argc, char *argv[])
                                  0, 0, 1280, 500, 5, depth,
                                  InputOutput, visual, CWBackPixel,
                                  &frame_attributes);
+    XSetWindowBackground(display, frame_window, 0xBEBEBE);
     XStoreName(display, frame_window, "Hello World Example");
     XSelectInput(display, frame_window, ExposureMask | StructureNotifyMask|ButtonPressMask|KeyPressMask);
 
@@ -312,6 +407,13 @@ int main (int argc, char *argv[])
                                   GCFont+GCForeground, &gr_values);
     XMapWindow(display, frame_window);
 
+    struct t_arg w_arg;
+    w_arg.run = 1;
+    w_arg.pdev = &dev;
+    w_arg.disp = display;
+    w_arg.win = frame_window;
+    w_arg.gc = graphical_context;
+    pthread_create(&th,NULL,worker, &w_arg);
     while ( 1 ) {
         XNextEvent(display, (XEvent *)&event);
         char k=0;
@@ -335,8 +437,7 @@ int main (int argc, char *argv[])
             case KeyPress:
                 dev.draw(display, frame_window, graphical_context, 0,0, 640,400);
                 dev.draw(display, frame_window, graphical_context, 640, 0, 640,400);
-                XDrawString(display, frame_window, graphical_context,
-                            100, 450, hello_string, hello_string_length);
+                
                 k = XLookupKeysym(&event, 0);
                 if (k == XK_space)  {
                     fprintf (stdout, "The space bar was pressed.\n");
@@ -350,7 +451,10 @@ int main (int argc, char *argv[])
         }
         if (k=='q') break;
     }
-    dev.exit();
+    w_arg.run = 0;
+    void *thr;
+    pthread_join(th, &thr); //wait for background thread to end
+    dev.exit(); //close device
     return(0);
 }
 
