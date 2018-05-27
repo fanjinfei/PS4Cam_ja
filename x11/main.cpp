@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <semaphore.h>
 #include <pthread.h>
 
 #include <inttypes.h>
@@ -20,12 +21,14 @@
 #include <iostream>
 #include <chrono>
 
+int stick_this_thread_to_core(int core_id);
 int read_JPEG_file (char * filename);
 void write_JPEG_file (JSAMPLE * image_buffer, int image_height, int image_width, char * filename, int quality);
 
 
 // Threads
-pthread_t th; // Drawing thread
+sem_t draw_sem;
+pthread_t th, th_usb, th_draw; // Drawing thread
 pthread_t *thFill=0; // Sub drawing threads
 pthread_t thFifo; // Pipe control thread
 pthread_t thPreload; // Preload image thread
@@ -139,7 +142,7 @@ long ofGetElapsedTimeMillis() {
     long            ms; // Milliseconds
     time_t          s;  // Seconds
     time_ms(s, ms);
-    return s*1000 + ms;
+    return (s%3600)*1000 + ms;
 }
 
 class Data {
@@ -156,7 +159,7 @@ class Data {
 
     int camFrameCount;
     int camFpsLastSampleFrame;
-    float camFpsLastSampleTime;
+    long camFpsLastSampleTime;
     float camFps;
     
     XImage *img_l;
@@ -225,16 +228,18 @@ void Data::update() {
             eye->check_ff71();
             frame=eye->getLastVideoFramePointer();
 
+if (1) {
             yuyvToRgb(frame->videoRightFrame, frame_rgb_right, eye->getWidth(), eye->getHeight());
             //videoTextureRight.loadData(frame_rgb_right, eye->getWidth(),eye->getHeight(), GL_RGB);
 
             yuyvToRgb(frame->videoLeftFrame, frame_rgb_left, eye->getWidth(), eye->getHeight());
             //videoTextureLeft.loadData(frame_rgb_left, eye->getWidth(),eye->getHeight(), GL_RGB);
+}
             hasNewFrame = 1;
         }
 
         camFrameCount += isNewFrame ? 1: 0;
-        float timeNow = ofGetElapsedTimeMillis();
+        long timeNow = ofGetElapsedTimeMillis();
         if( timeNow > camFpsLastSampleTime + 1000 ) {
             uint32_t framesPassed = camFrameCount - camFpsLastSampleFrame;
             camFps = (float)(framesPassed / ((timeNow - camFpsLastSampleTime)*0.001f));
@@ -317,39 +322,32 @@ void Data::exit() {
     std::cout << "eye exited" << std::endl;
 }
 
-void *worker(void* arg) { //background camera+draw thread
+void *worker_usb(void* arg) { 
     struct t_arg *ta = (struct t_arg *)arg;
+    stick_this_thread_to_core(6);
+    while (ta->run) { //refresh rate:30
+//pthread_mutex_lock(&mutexData);
+        bool res = ps4eye::PS4EYECam::updateDevices();
+//pthread_mutex_unlock(&mutexData);
+        if(!res) {
+                break;
+        }
+    }
+    return NULL;
+}
+
+void *worker_draw(void* arg) { //background camera+draw thread
+    struct t_arg *ta = (struct t_arg *)arg;
+    stick_this_thread_to_core(5);
+
     Data *pdev = ta->pdev;
     long i = 0, j=0;
     long last = ofGetElapsedTimeMillis();
     while (ta->run) { //refresh rate:30
-        usleep(1*1000);
-        long now = ofGetElapsedTimeMillis();
-        if( now - last<33 ) continue;
-        
-        pdev->update();
-        if (pdev->hasNewFrame || 1) {
-            pdev->draw(ta->disp, ta->win, ta->gc, 0,0, 640,400);
-            pdev->hasNewFrame = 0;
-        }
-        i++;
-        if (i %33 ==0) { //app rate
-            ;//std::cout << "working ms... " << (now-last) << std::endl;
-        }
-        if( now > last + 1000 ) {
-            uint32_t framesPassed = i - j;
-            float appFps = (float)(framesPassed / ((now - last)*0.001f));
-
-            last = now;
-            j = i;
-            
-            std::cout << "appFps... " << appFps << std::endl;
-            
-            ta->appFps = (int) appFps;
-            std::string str = "app fps: " +std::to_string(ta->appFps) + "   ";
-            std::string cstr = "cam fps: " +std::to_string(int(pdev->camFps)) + "   ";
-            str = str+cstr;
-            
+        sem_wait(&draw_sem);
+        pdev->draw(ta->disp, ta->win, ta->gc, 0,0, 640,400);
+        if (1) {   
+            std::string str = "cam fps: " +std::to_string(int(pdev->camFps));
             XClearArea(ta->disp, ta->win,100,430, 250, 20, false); //no background, do nothing
             //XClearWindow(ta->disp, ta->win);
             XDrawRectangle(ta->disp, ta->win, ta->gc,
@@ -358,9 +356,44 @@ void *worker(void* arg) { //background camera+draw thread
                             
             XDrawString(ta->disp, ta->win, ta->gc,
                             100, 450, str.c_str(), str.size());
+         }
+    }
+    return NULL;
+}
 
+void *worker(void* arg) { //background camera+draw thread
+    struct t_arg *ta = (struct t_arg *)arg;
+    stick_this_thread_to_core(7);
+
+    Data *pdev = ta->pdev;
+    long i = 0, j=0;
+    long last = ofGetElapsedTimeMillis();
+    while (ta->run) { //refresh rate:30
+        usleep(30*1000);
+        long now = ofGetElapsedTimeMillis();
+        //if( now - last<33 ) continue;
+        
+        pdev->update();
+        if (pdev->hasNewFrame) {
+            // send signal to drawer
+            sem_post(&draw_sem);
+            pdev->hasNewFrame = 0;
         }
-        XFlush(ta->disp);
+        i++;
+        if( now > last + 1000 ) {
+            uint32_t framesPassed = i - j;
+            float appFps = (float)(framesPassed / ((now - last)*0.001f));
+
+            last = now;
+            j = i;
+        
+            ta->appFps = (int) appFps;
+            std::string str = "app fps: " +std::to_string(ta->appFps) + "   ";
+            std::string cstr = "cam fps: " +std::to_string(int(pdev->camFps)) + "   ";
+            str = str+cstr+ " " + std::to_string(int(now/1000.0f)) ;
+            //std::cout << str << std::endl;
+        }
+        //XFlush(ta->disp);
 
     }
     std::cout << "worker exited" << std::endl;
@@ -385,6 +418,7 @@ int main (int argc, char *argv[])
 
     Data dev = Data();
     dev.setup();
+    sem_init(&draw_sem, 0, 0);
 
     display = XOpenDisplay(NULL);
     visual = DefaultVisual(display, 0);
@@ -398,7 +432,9 @@ int main (int argc, char *argv[])
                                  &frame_attributes);
     XSetWindowBackground(display, frame_window, 0xBEBEBE);
     XStoreName(display, frame_window, "Hello World Example");
-    XSelectInput(display, frame_window, ExposureMask | StructureNotifyMask|ButtonPressMask|KeyPressMask);
+
+//    XSelectInput(display, frame_window, ExposureMask | StructureNotifyMask|ButtonPressMask|KeyPressMask);
+    XSelectInput(display, frame_window, KeyPressMask);
 
     fontinfo = XLoadQueryFont(display, "10x20");
     gr_values.font = fontinfo->fid;
@@ -414,6 +450,8 @@ int main (int argc, char *argv[])
     w_arg.win = frame_window;
     w_arg.gc = graphical_context;
     pthread_create(&th,NULL,worker, &w_arg);
+    pthread_create(&th_usb,NULL,worker_usb, &w_arg);
+    pthread_create(&th_draw,NULL,worker_draw, &w_arg);
     while ( 1 ) {
         XNextEvent(display, (XEvent *)&event);
         char k=0;
@@ -435,8 +473,8 @@ int main (int argc, char *argv[])
                 break;
             }
             case KeyPress:
-                dev.draw(display, frame_window, graphical_context, 0,0, 640,400);
-                dev.draw(display, frame_window, graphical_context, 640, 0, 640,400);
+                //dev.draw(display, frame_window, graphical_context, 0,0, 640,400);
+                //dev.draw(display, frame_window, graphical_context, 640, 0, 640,400);
                 
                 k = XLookupKeysym(&event, 0);
                 if (k == XK_space)  {
@@ -778,3 +816,17 @@ unsigned char* read_jpeg(const char* sFile, int& iW, int& iH)
 
   return buf;
 }
+
+int stick_this_thread_to_core(int core_id) {
+   int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+   if (core_id < 0 || core_id >= num_cores)
+      return EINVAL;
+
+   cpu_set_t cpuset;
+   CPU_ZERO(&cpuset);
+   CPU_SET(core_id, &cpuset);
+
+   pthread_t current_thread = pthread_self();    
+   return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+}
+

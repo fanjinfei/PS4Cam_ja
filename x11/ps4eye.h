@@ -65,6 +65,7 @@ namespace std {
 
 #include <stdint.h>
 
+//#define DEBUG
 #if defined(DEBUG)
 #define debug(x...) fprintf(stdout,x)
 #else

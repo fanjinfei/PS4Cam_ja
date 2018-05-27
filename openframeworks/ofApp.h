@@ -13,7 +13,8 @@ public:
     }
 
     void start(){
-        startThread(false, false);   // blocking, verbose
+//jinf        startThread(false, false);   // blocking, verbose
+        startThread();   // blocking, verbose
     }
 
     void stop(){

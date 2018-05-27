@@ -1649,7 +1649,8 @@ namespace ps4eye {
 
        //TODO define different  modes to choose resolution and fps
          // init and start urb
-        uvc_set_video_mode(1, 30);
+//        uvc_set_video_mode(1, 30);
+        uvc_set_video_mode(1, 15);
 
         urb->is_streaming=true;
         urb->start_transfers(handle_, frame_stride*frame_height);
@@ -1750,8 +1751,8 @@ namespace ps4eye {
             default:
                 break;
         }
-
-
+if (urb->ff71status>=0 && urb->ff71status<=5)
+debug("i=%d Write register 0xff70 to f1\n",urb->ff71status);
         
     }
     bool PS4EYECam::isNewFrame() const
@@ -2744,9 +2745,9 @@ namespace ps4eye {
      */
     void PS4EYECam::submitAndWait_controlTransfer(uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, uint16_t wLength, uint8_t *buffer)
     {
-        submit_controlTransfer(bmRequestType, bRequest, wValue, wIndex, wLength, buffer);
         controlTransferReturned = false;
         controlTransferError = false;
+        submit_controlTransfer(bmRequestType, bRequest, wValue, wIndex, wLength, buffer);
         while (!controlTransferReturned)
             USBMgr::handleEvents();
     }

@@ -293,7 +293,7 @@ void write_JPEG_file (JSAMPLE * image_buffer, int image_height, int image_width,
 struct my_error_mgr {
   struct jpeg_error_mgr pub;	/* "public" fields */
 
-  jmp_buf setjmp_buffer;	/* for return to caller */
+//  jmp_buf setjmp_buffer;	/* for return to caller */
 };
 
 typedef struct my_error_mgr * my_error_ptr;
@@ -304,6 +304,7 @@ typedef struct my_error_mgr * my_error_ptr;
 
 void my_error_exit (j_common_ptr cinfo)
 {
+return;
   /* cinfo->err really points to a my_error_mgr struct, so coerce pointer */
   my_error_ptr myerr = (my_error_ptr) cinfo->err;
 
@@ -312,7 +313,7 @@ void my_error_exit (j_common_ptr cinfo)
   (*cinfo->err->output_message) (cinfo);
 
   /* Return control to the setjmp point */
-  longjmp(myerr->setjmp_buffer, 1);
+  //longjmp(myerr->setjmp_buffer, 1);
 }
 int read_JPEG_file (char * filename)
 {
@@ -347,14 +348,15 @@ int read_JPEG_file (char * filename)
   cinfo.err = jpeg_std_error(&jerr.pub);
   jerr.pub.error_exit = my_error_exit;
   /* Establish the setjmp return context for my_error_exit to use. */
-  if (setjmp(jerr.setjmp_buffer)) {
-    /* If we get here, the JPEG code has signaled an error.
-     * We need to clean up the JPEG object, close the input file, and return.
-     */
+/*  if (setjmp(jerr.setjmp_buffer)) {
+    // If we get here, the JPEG code has signaled an error.
+    // * We need to clean up the JPEG object, close the input file, and return.
+    //  /
     jpeg_destroy_decompress(&cinfo);
     fclose(infile);
     return 0;
   }
+*/
   /* Now we can initialize the JPEG decompression object. */
   jpeg_create_decompress(&cinfo);
 
