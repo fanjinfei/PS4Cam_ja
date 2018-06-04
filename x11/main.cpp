@@ -250,7 +250,7 @@ void Data::update() {
             yuyvToRgb(frame->videoLeftFrame, frame_rgb_left, eye->getWidth(), eye->getHeight());
             //videoTextureLeft.loadData(frame_rgb_left, eye->getWidth(),eye->getHeight(), GL_RGB);
          } else if (camFrameCount >100 and raw_index<100) {
-           eye->getLastRawFrame(raw_frames[raw_index], 100);
+           eye->getLastRawFrame(raw_frames[raw_index], raw_frame_size);
            raw_index++;
          }else {
            eye->getLastRawFrame(NULL, 0);
