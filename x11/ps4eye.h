@@ -128,6 +128,7 @@ namespace ps4eye {
         const uint8_t* getLastVideoLeftFramePointer();
         const uint8_t* getLastVideoRightFramePointer();
         eyeframe* getLastVideoFramePointer();
+        int getLastRawFrame(uint8_t *data, int max_size);
 
       //  const uint8_t* getLastVideoFramePointer();
         //const uint8_t* getLastDepthFramePointer();

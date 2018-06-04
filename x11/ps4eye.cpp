@@ -215,6 +215,7 @@ namespace ps4eye {
         static libusb_context* usbContext() { return instance()->usb_context; }
         static int listDevices(std::vector<PS4EYECam::PS4EYERef>& list);
         static bool handleEvents();
+        static int handleEvents_timeout();
 
         static std::shared_ptr<USBMgr>  sInstance;
         static int                      sTotalDevices;
@@ -256,6 +257,12 @@ namespace ps4eye {
     bool USBMgr::handleEvents()
     {
         return (libusb_handle_events(instance()->usb_context) == 0);
+    }
+    int USBMgr::handleEvents_timeout()
+    {
+        struct timeval tv = {5, 500};
+        int rc = 0;
+        return libusb_handle_events_timeout(instance()->usb_context, &tv);
     }
 
     int USBMgr::listDevices( std::vector<PS4EYECam::PS4EYERef>& list )
@@ -376,7 +383,7 @@ namespace ps4eye {
             debug("URBDesc destructor\n");
             if(num_transfers)
             {
-                close_transfers();
+                shutdown_transfers();
             }
             if(frame_buffer != NULL)
                 free(frame_buffer);
@@ -427,6 +434,24 @@ namespace ps4eye {
 
             return res == 0;
 
+        }
+
+        void shutdown_transfers()
+        {
+            int i;
+            for(i=0;i<num_transfers;i++)
+            {
+                libusb_cancel_transfer(xfr[i]);
+            }
+            while(num_transfers>0)
+            {
+                usleep(1000);
+                if( !USBMgr::instance()->handleEvents_timeout() )
+                {
+                    break;
+                }
+//                printf("pending xfr %d\n",num_transfers);
+            }
         }
 
         void close_transfers()
@@ -714,8 +739,10 @@ namespace ps4eye {
     PS4EYECam::~PS4EYECam()
     {
         debug("PS4EYECAM destructor\n");
-        stop();
-        release();
+        if (is_streaming) {
+          stop();
+          release();       
+        }
     }
 
     void PS4EYECam::release()
@@ -1662,6 +1689,7 @@ namespace ps4eye {
     {
         debug("stop is called is_streaming is: %d\n",is_streaming);
         if(!is_streaming) return;
+        is_streaming = false;
         //set led off
 
         //set_led_off();
@@ -1670,22 +1698,27 @@ namespace ps4eye {
         //stop_sensors_streaming();
        // reset_sensors();
         // close urb
-        urb->close_transfers();
-        is_streaming = false;
+        //urb->shutdown_transfers();
+
+    while (1) { 
+        bool res = USBMgr::instance()->handleEvents_timeout();
+        if(!res) {
+                break;
+        }
+    }
+
         sleep(1);
 
        // urb->is_streaming=false;
-
-
-
-
+printf("exit 3 \n");
     }
     void PS4EYECam::shutdown()
     {
         debug("PS4EYECAM shutdown called wait...\n");
+printf("exit 4 \n");
         stop();
         sleep(2);
-        urb->num_transfers=0;
+        //urb->num_transfers=0;
        // release();
     }
     void PS4EYECam::check_ff71()
@@ -1780,6 +1813,21 @@ debug("i=%d Write register 0xff70 to f1\n",urb->ff71status);
 
         }
         return &myframe;
+        
+    }
+
+    int PS4EYECam::getLastRawFrame(uint8_t *data, int max_size)
+    {
+
+        int size = linesize*2*frame_height;
+        last_qued_frame_time = urb->last_frame_time;
+
+        uint8_t *rowpointer;
+        if (max_size < size) return 0;
+        rowpointer=&(urb->frame_buffer[urb->frame_complete_ind * urb->frame_size]);
+        memcpy(data, rowpointer, size);
+
+        return size;
         
     }
 

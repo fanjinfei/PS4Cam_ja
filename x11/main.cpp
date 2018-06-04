@@ -4,6 +4,7 @@
 #include <string.h>
 #include <semaphore.h>
 #include <pthread.h>
+#include <sched.h>
 
 #include <inttypes.h>
 #include <math.h>
@@ -19,9 +20,12 @@
 
 #include "ps4eye.h"
 #include <iostream>
+#include <fstream>
 #include <chrono>
+#include <string>
 
 int stick_this_thread_to_core(int core_id);
+void set_realtime_priority();
 int read_JPEG_file (char * filename);
 void write_JPEG_file (JSAMPLE * image_buffer, int image_height, int image_width, char * filename, int quality);
 
@@ -42,7 +46,7 @@ unsigned char* read_jpeg(const char* sFile, int& iW, int& iH);
 /*--------------------------------------------------------*\
  |    yuv2rgb                                               |
  \*--------------------------------------------------------*/
-void yuv2rgb(int y, int u, int v, char *r, char *g, char *b)
+void inline yuv2rgb(int y, int u, int v, char *r, char *g, char *b)
 {
     int r1, g1, b1;
     int c = y-16, d = u - 128, e = v - 128;
@@ -147,9 +151,10 @@ long ofGetElapsedTimeMillis() {
 
 class Data {
   public:
-    void setup();
+    void setup(int draw);
     void update();
     void record();
+    void record2();
     void draw(Display *display, Window window, GC gc, int x, int y,int w, int h);
     void exit();
     ps4eye::PS4EYECam::PS4EYERef eye;
@@ -166,6 +171,9 @@ class Data {
     XImage *img_r;
     int hasNewFrame;
 
+    uint8_t *raw_frames[100]; //3 seconds data
+    int raw_index, raw_frame_size, xdraw;
+
 };
 
 struct t_arg {
@@ -177,7 +185,7 @@ struct t_arg {
     int run;
 };
 
-void Data::setup() {
+void Data::setup(int _draw) {
     using namespace ps4eye;
 
     camFrameCount = 0;
@@ -185,6 +193,7 @@ void Data::setup() {
     camFpsLastSampleTime = 0;
     camFps = 0;
     hasNewFrame = 0;
+    xdraw = _draw;
 
     // // list out the devices
     //  std::vector<PS3EYECam::PS3EYERef> devices( PS3EYECam::getDevices() );
@@ -195,7 +204,7 @@ void Data::setup() {
     {
         eye = devices.at(0);
         std::cerr << "Initializing..." << std::endl;
-       bool res = eye->init(1, 8);
+       bool res = eye->init(1, 30);
         std::cerr << "Starting..." << std::endl;
        eye->start();
 
@@ -207,7 +216,13 @@ void Data::setup() {
 
        videoFrame 	= new unsigned char[eye->getWidth()*eye->getHeight()*3];
 
-        std::cerr << "Thread Starting..." << std::endl;
+       raw_frame_size = eye->getHeight()*1748*2;
+       for (int i=0; i<100; i++){
+           raw_frames[i] = new uint8_t[raw_frame_size];
+       }
+       raw_index = 0;
+
+        std::cerr << "Thread Starting... " << (raw_frame_size/eye->getHeight()) <<" "<< eye->getWidth() <<" " << eye->getHeight()  << std::endl;
     }
     else {
         int iw, ih;
@@ -226,15 +241,20 @@ void Data::update() {
         if(isNewFrame)
         {
             eye->check_ff71();
+          if (xdraw) {
             frame=eye->getLastVideoFramePointer();
 
-if (1) {
             yuyvToRgb(frame->videoRightFrame, frame_rgb_right, eye->getWidth(), eye->getHeight());
             //videoTextureRight.loadData(frame_rgb_right, eye->getWidth(),eye->getHeight(), GL_RGB);
 
             yuyvToRgb(frame->videoLeftFrame, frame_rgb_left, eye->getWidth(), eye->getHeight());
             //videoTextureLeft.loadData(frame_rgb_left, eye->getWidth(),eye->getHeight(), GL_RGB);
-}
+         } else if (camFrameCount >100 and raw_index<100) {
+           eye->getLastRawFrame(raw_frames[raw_index], 100);
+           raw_index++;
+         }else {
+           eye->getLastRawFrame(NULL, 0);
+         }
             hasNewFrame = 1;
         }
 
@@ -253,6 +273,18 @@ if (1) {
 void Data::record(){
     write_JPEG_file (frame_rgb_left, eye->getHeight(), eye->getWidth(), "/tmp/1_l.jpg", 100);
     write_JPEG_file (frame_rgb_right, eye->getHeight(), eye->getWidth(), "/tmp/1_r.jpg", 100);
+}
+void Data::record2(){
+    if (raw_index <100) return;
+    auto startTime = std::chrono::high_resolution_clock::now();
+    auto myfile = std::fstream("/tmp/rawfames.dat", std::ios::out | std::ios::binary);
+    for (int i=0; i<100; i++)
+        myfile.write((char*)&raw_frames[i][0], raw_frame_size);
+    myfile.close();
+    auto endTime = std::chrono::high_resolution_clock::now();
+
+    std::cout << "record time "<< std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
+   
 }
 //--------------------------------------------------------------
 void Data::draw(Display *display, Window window, GC gc, int x, int y, int w, int h){
@@ -325,6 +357,7 @@ void Data::exit() {
 void *worker_usb(void* arg) { 
     struct t_arg *ta = (struct t_arg *)arg;
     stick_this_thread_to_core(6);
+    set_realtime_priority();
     while (ta->run) { //refresh rate:30
 //pthread_mutex_lock(&mutexData);
         bool res = ps4eye::PS4EYECam::updateDevices();
@@ -333,6 +366,7 @@ void *worker_usb(void* arg) {
                 break;
         }
     }
+    std::cout << "polling exited" << std::endl;
     return NULL;
 }
 
@@ -346,7 +380,7 @@ void *worker_draw(void* arg) { //background camera+draw thread
     while (ta->run) { //refresh rate:30
         sem_wait(&draw_sem);
         pdev->draw(ta->disp, ta->win, ta->gc, 0,0, 640,400);
-        if (1) {   
+        if (0) {   
             std::string str = "cam fps: " +std::to_string(int(pdev->camFps));
             XClearArea(ta->disp, ta->win,100,430, 250, 20, false); //no background, do nothing
             //XClearWindow(ta->disp, ta->win);
@@ -356,6 +390,7 @@ void *worker_draw(void* arg) { //background camera+draw thread
                             
             XDrawString(ta->disp, ta->win, ta->gc,
                             100, 450, str.c_str(), str.size());
+        //XFlush(ta->disp);
          }
     }
     return NULL;
@@ -364,17 +399,18 @@ void *worker_draw(void* arg) { //background camera+draw thread
 void *worker(void* arg) { //background camera+draw thread
     struct t_arg *ta = (struct t_arg *)arg;
     stick_this_thread_to_core(7);
+    set_realtime_priority();
 
     Data *pdev = ta->pdev;
     long i = 0, j=0;
     long last = ofGetElapsedTimeMillis();
     while (ta->run) { //refresh rate:30
-        usleep(30*1000);
+        usleep(3*1000);
         long now = ofGetElapsedTimeMillis();
         //if( now - last<33 ) continue;
         
         pdev->update();
-        if (pdev->hasNewFrame) {
+        if (pdev->hasNewFrame && pdev->xdraw) {
             // send signal to drawer
             sem_post(&draw_sem);
             pdev->hasNewFrame = 0;
@@ -391,10 +427,8 @@ void *worker(void* arg) { //background camera+draw thread
             std::string str = "app fps: " +std::to_string(ta->appFps) + "   ";
             std::string cstr = "cam fps: " +std::to_string(int(pdev->camFps)) + "   ";
             str = str+cstr+ " " + std::to_string(int(now/1000.0f)) ;
-            //std::cout << str << std::endl;
+            std::cout << str << std::endl;
         }
-        //XFlush(ta->disp);
-
     }
     std::cout << "worker exited" << std::endl;
     return NULL;
@@ -415,9 +449,11 @@ int main (int argc, char *argv[])
     XKeyEvent               event;
     char                    hello_string[] = "Hello World";
     int                     hello_string_length = strlen(hello_string);
+    int draw = 0;
 
+    if (argc >1) draw = std::stoi(argv[1], nullptr, 0);
     Data dev = Data();
-    dev.setup();
+    dev.setup(draw);
     sem_init(&draw_sem, 0, 0);
 
     display = XOpenDisplay(NULL);
@@ -481,7 +517,7 @@ int main (int argc, char *argv[])
                     fprintf (stdout, "The space bar was pressed.\n");
                 }else{ fprintf (stdout, "The %c was pressed.\n", k); }
                 if (k=='r'){
-                    dev.record();
+                    dev.record2();
                 }
                 break;
             default:
@@ -492,7 +528,13 @@ int main (int argc, char *argv[])
     w_arg.run = 0;
     void *thr;
     pthread_join(th, &thr); //wait for background thread to end
+    //pthread_join(th_usb, &thr); //wait for background thread to end
+    //pthread_join(th_draw, &thr); //wait for background thread to end
     dev.exit(); //close device
+
+    pthread_join(th_usb, &thr); //wait for background thread to end
+    //pthread_join(th_draw, &thr); //wait for background thread to end
+
     return(0);
 }
 
@@ -815,6 +857,43 @@ unsigned char* read_jpeg(const char* sFile, int& iW, int& iH)
   fclose(f);
 
   return buf;
+}
+void set_realtime_priority() {
+     int ret;
+
+     // We'll operate on the currently running thread.
+     pthread_t this_thread = pthread_self();
+     // struct sched_param is used to store the scheduling priority
+     struct sched_param params;
+
+     // We'll set the priority to the maximum.
+     params.sched_priority = sched_get_priority_max(SCHED_FIFO);
+     std::cout << "Trying to set thread realtime prio = " << params.sched_priority << std::endl;
+
+     // Attempt to set thread real-time priority to the SCHED_FIFO policy
+     ret = pthread_setschedparam(this_thread, SCHED_FIFO, &params);
+     if (ret != 0) {
+         // Print the error
+         std::cout << "Unsuccessful in setting thread realtime prio" << std::endl;
+         return;     
+     }
+     // Now verify the change in thread priority
+     int policy = 0;
+     ret = pthread_getschedparam(this_thread, &policy, &params);
+     if (ret != 0) {
+         std::cout << "Couldn't retrieve real-time scheduling paramers" << std::endl;
+         return;
+     }
+
+     // Check the correct policy was applied
+     if(policy != SCHED_FIFO) {
+         std::cout << "Scheduling is NOT SCHED_FIFO!" << std::endl;
+     } else {
+         std::cout << "SCHED_FIFO OK" << std::endl;
+     }
+
+     // Print thread scheduling priority
+     std::cout << "Thread priority is " << params.sched_priority << std::endl; 
 }
 
 int stick_this_thread_to_core(int core_id) {
