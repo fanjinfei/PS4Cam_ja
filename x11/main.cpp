@@ -322,10 +322,17 @@ void Data::draw(Display *display, Window window, GC gc, int x, int y, int w, int
     idata2 = (unsigned char *)img_r->data;
     for (int i=0; i<iw; i++)
         for (int j =0; j<ih; j++) {
-           for (int k=0; k<3; k++) {
-               idata[(i+j*iw)*4+k] = frame_rgb_left[(i+j*640)*3 + k];
-               idata2[(i+j*iw)*4+k] = frame_rgb_right[(i+j*640)*3 + k];
+           int idx = (i+j*iw)*4, s_idx=(i+j*iw)*3;
+           /*for (int k=0; k<3; k++) {
+               idata[idx+k] = frame_rgb_left[s_idx + k];
+               idata2[idx+k] = frame_rgb_right[s_idx + k];
            }
+           char r= idata[idx], b= idata[idx+2]; //RGB ->BGR
+           idata[idx] = b; idata[idx+2] = r;
+           r= idata2[idx]; b= idata2[idx+2];
+           idata2[idx] = b; idata2[idx+2] = r;*/
+           idata[idx] = frame_rgb_left[s_idx+2]; idata[idx+2] = frame_rgb_left[s_idx]; idata[idx+1] = frame_rgb_left[s_idx+1];
+           idata2[idx] = frame_rgb_right[s_idx+2]; idata2[idx+2] = frame_rgb_right[s_idx]; idata2[idx+1] = frame_rgb_right[s_idx+1];
         }
 
     XPutImage(display,window,gc,img_l,0,0,x,y,w,h);
@@ -517,7 +524,7 @@ int main (int argc, char *argv[])
                     fprintf (stdout, "The space bar was pressed.\n");
                 }else{ fprintf (stdout, "The %c was pressed.\n", k); }
                 if (k=='r'){
-                    dev.record2();
+                    dev.record();
                 }
                 break;
             default:
